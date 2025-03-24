@@ -1,27 +1,27 @@
 package org;
 
 import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class Server {
-    private static final List<String> VALID_PATHS = List.of(
-            "/index.html", "/spring.svg", "/spring.png",
-            "/resources.html", "/styles.css", "/app.js",
-            "/links.html", "/forms.html", "/classic.html", "/events.html", "/events.js");
+    // private static final List<String> VALID_PATHS = List.of(
+    //         "/index.html", "/spring.svg", "/spring.png",
+    //         "/resources.html", "/styles.css", "/app.js",
+    //         "/links.html", "/forms.html", "/classic.html", "/events.html", "/events.js");
     private static final int PORT = 9999;
     private static final String PUBLIC_DIR = "public";
     private static final String CLASSIC_HTML_PATH = "/classic.html";
+    private final Map<String, Map<String, Handler>> handlers = new ConcurrentHashMap<>();
 
     protected void start() {
         ExecutorService executor = Executors.newFixedThreadPool(64);
@@ -46,23 +46,28 @@ public class Server {
 
     private void handleConnection(Socket socket) {
         try (socket;
-             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
              BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())
         ) {
-            // must be in form GET /path HTTP/1.1
-            Optional<String> requestLine = Optional.ofNullable(in.readLine());
-            if (requestLine.isEmpty()) {
-                return;
-            }
-            String path = getPathFromRequest(requestLine);
 
-            if (path == null || !VALID_PATHS.contains(path)) {
-                sendResponse(out, 404, "Not Found", null, 0);
-                out.flush();
+            Request request = Request.fromInputStream(socket.getInputStream());
+            String path = request.getPath();
+            String method = request.getMethod();
+
+            Handler handler = Optional.ofNullable(handlers.get(method))
+                    .map(h -> h.get(path))
+                    .orElse(null);
+
+            if (handler != null) {
+                handler.handle(request, out);
                 return;
             }
 
             Path filePath = Path.of(".", PUBLIC_DIR, path);
+            if (!Files.exists(filePath)) {
+                sendResponse(out, 404, "Not Found", null, 0);
+                return;
+            }
+
             String mimeType = Files.probeContentType(filePath);
 
             if (path.equals(CLASSIC_HTML_PATH)) {
@@ -75,21 +80,15 @@ public class Server {
         }
     }
 
-    private String getPathFromRequest(Optional<String> requestLine) {
-        String[] parts = requestLine.get().split(" ");
-        if (parts.length != 3) {
-            return null;
-        }
-        return parts[1];
+    public void addHandler(String method, String path, Handler handler) {
+        handlers.computeIfAbsent(method, k -> new ConcurrentHashMap<>())
+                .put(path, handler);
     }
 
     private void sendForClassicHtml(BufferedOutputStream out, Path filePath, String mimeType) throws IOException {
         String template = Files.readString(filePath);
-        byte[] content = template.replace(
-                "{time}",
-                LocalDateTime.now().toString()
-        ).getBytes();
-
+        byte[] content = template.replace("{time}", LocalDateTime.now().toString())
+                .getBytes();
         sendResponse(out, 200, "OK", mimeType, content.length);
         out.write(content);
         out.flush();
@@ -103,8 +102,8 @@ public class Server {
         out.flush();
     }
 
-    private void sendResponse(BufferedOutputStream out, int statusCode, String statusText,
-                              String mimeType, long contentLength) throws IOException {
+    protected void sendResponse(BufferedOutputStream out, int statusCode, String statusText,
+                                String mimeType, long contentLength) throws IOException {
         StringBuilder headers = new StringBuilder();
         headers.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
