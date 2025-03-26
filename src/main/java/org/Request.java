@@ -1,9 +1,8 @@
 package org;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -14,31 +13,43 @@ public class Request {
     private final String method;
     private final String path;
     private final Map<String, String> queryParams;
-    private final InputStream inputStream;
+    private static final int limit = 4096;
+    private final byte[] bodyBytes;
 
     public Request(String method, String path, String version, Map<String, String> headers,
-                   InputStream inputStream, Map<String, String> queryParams) {
+                   byte[] bodyBytes, Map<String, String> queryParams) {
         this.method = method;
         this.path = path;
         this.queryParams = queryParams;
-        this.inputStream = inputStream;
+        this.bodyBytes = bodyBytes;
     }
 
-    public static Request fromInputStream(InputStream inputStream) throws IOException {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        String startLine = reader.readLine();
-        if (startLine == null || startLine.isBlank()) {
-            throw new IOException("Empty request line");
+    public static Request fromInputStream(InputStream in) throws IOException {
+        ByteArrayOutputStream requestLine = new ByteArrayOutputStream();
+        byte[] buffer = new byte[limit];
+        int read;
+
+        while ((read = in.read(buffer)) != -1) {
+            requestLine.write(buffer, 0, read);
+            if (requestLine.toString().contains("\r\n\r\n")) {
+                break;
+            }
+        }
+        byte[] requestLineByteArray = requestLine.toByteArray();
+        String requestText = new String(requestLineByteArray, StandardCharsets.UTF_8);
+
+        int headerEndIndex = requestText.indexOf("\r\n\r\n");
+        String headerPart = requestText.substring(0, headerEndIndex);
+        String[] headerLines = headerPart.split("\r\n");
+
+        String[] requestLineParts = headerLines[0].split(" ");//"POST /messages?last=10 HTTP/1.1"
+        if (requestLineParts.length != 3) {
+            throw new IOException("Invalid request line: " + headerPart);
         }
 
-        String[] parts = startLine.split(" ");
-        if (parts.length != 3) {
-            throw new IOException("Invalid request line: " + startLine);
-        }
-
-        String method = parts[0];
-        String fullPath = parts[1];    // fullPath = '/search?key1=value1&k2=v2'
-        String version = parts[2];
+        String method = requestLineParts[0];
+        String fullPath = requestLineParts[1]; // fullPath = '/search?key1=value1&k2=v2'
+        String version = requestLineParts[2];
 
         String path;
         Map<String, String> queryParams;
@@ -53,9 +64,26 @@ public class Request {
             queryParams = new HashMap<>();
         }
 
-        Map<String, String> headers = parseHeaders(reader);
+        Map<String, String> headers = parseHeaders(headerLines);
 
-        return new Request(method, path, version, headers, inputStream, queryParams);
+        ByteArrayOutputStream bodyBuffer = new ByteArrayOutputStream();
+        int bodyStart = headerEndIndex + 4;   //after \r\n\r\n
+
+        if (requestLineByteArray.length > bodyStart) {
+            bodyBuffer.write(requestLineByteArray, bodyStart, requestLineByteArray.length - bodyStart);
+        }
+
+        if (headers.containsKey("Content-Length")) {
+            int contentLength = Integer.parseInt(headers.get("Content-Length"));
+            while (bodyBuffer.size() < contentLength) {
+                read = in.read(buffer);
+                if (read == -1) break;
+                bodyBuffer.write(buffer, 0, read);
+            }
+        }
+        byte[] bodyBytes = bodyBuffer.toByteArray();
+
+        return new Request(method, path, version, headers, bodyBytes, queryParams);
     }
 
     private static Map<String, String> parseQueryParams(String queryString) {
@@ -73,15 +101,13 @@ public class Request {
     }
 
 
-    private static Map<String, String> parseHeaders(BufferedReader reader) throws IOException {
+    private static Map<String, String> parseHeaders(String[] lines) {
         Map<String, String> headers = new HashMap<>();
-        String line;
-        while ((line = reader.readLine()) != null && !line.isBlank()) {
-            if (!line.contains(":")) continue;
-            String[] parts2 = line.split(":", 2);
-            if (parts2.length == 2) {
-                String name = parts2[0].trim();
-                String value = parts2[1].trim();
+        for (int i = 1; i < lines.length; i++) {
+            String[] headerParts = lines[i].split(":", 2);
+            if (headerParts.length == 2) {
+                String name = headerParts[0].trim();
+                String value = headerParts[1].trim();
                 headers.put(name, value);
             }
         }
@@ -105,7 +131,6 @@ public class Request {
     }
 
     public String getBodyAsString() throws IOException {
-        byte[] bodyBytes = inputStream.readAllBytes();
         return new String(bodyBytes, StandardCharsets.UTF_8);
     }
 }
