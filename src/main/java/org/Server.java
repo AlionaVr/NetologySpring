@@ -18,10 +18,14 @@ public class Server {
     //         "/index.html", "/spring.svg", "/spring.png",
     //         "/resources.html", "/styles.css", "/app.js",
     //         "/links.html", "/forms.html", "/classic.html", "/events.html", "/events.js");
-    private static final int PORT = 9999;
-    private static final String PUBLIC_DIR = "public";
-    private static final String CLASSIC_HTML_PATH = "/classic.html";
+    private final int PORT;
+    private final String PUBLIC_DIR = "public";
+    private final String CLASSIC_HTML_PATH = "/classic.html";
     private final Map<String, Map<String, Handler>> handlers = new ConcurrentHashMap<>();
+
+    public Server(int port) {
+        this.PORT = port;
+    }
 
     protected void start() {
         ExecutorService executor = Executors.newFixedThreadPool(64);
