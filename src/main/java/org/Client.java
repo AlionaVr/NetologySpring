@@ -34,6 +34,7 @@ public class Client {
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(urlString))
+                .header("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

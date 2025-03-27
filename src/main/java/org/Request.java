@@ -5,8 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 
 public class Request {
@@ -15,13 +14,15 @@ public class Request {
     private final Map<String, String> queryParams;
     private static final int limit = 4096;
     private final byte[] bodyBytes;
+    private final Map<String, List<String>> postParams;
 
     public Request(String method, String path, String version, Map<String, String> headers,
-                   byte[] bodyBytes, Map<String, String> queryParams) {
+                   byte[] bodyBytes, Map<String, String> queryParams, Map<String, List<String>> postParams) {
         this.method = method;
         this.path = path;
         this.queryParams = queryParams;
         this.bodyBytes = bodyBytes;
+        this.postParams = postParams;
     }
 
     public static Request fromInputStream(InputStream in) throws IOException {
@@ -35,6 +36,7 @@ public class Request {
                 break;
             }
         }
+
         byte[] requestLineByteArray = requestLine.toByteArray();
         String requestText = new String(requestLineByteArray, StandardCharsets.UTF_8);
 
@@ -52,7 +54,7 @@ public class Request {
         String version = requestLineParts[2];
 
         String path;
-        Map<String, String> queryParams;
+        Map<String, String> queryParams = new HashMap<>();
 
         int questionIndex = fullPath.indexOf('?');
         if (questionIndex != -1) {
@@ -61,7 +63,6 @@ public class Request {
             queryParams = parseQueryParams(queryString);
         } else {
             path = fullPath;
-            queryParams = new HashMap<>();
         }
 
         Map<String, String> headers = parseHeaders(headerLines);
@@ -73,6 +74,21 @@ public class Request {
             bodyBuffer.write(requestLineByteArray, bodyStart, requestLineByteArray.length - bodyStart);
         }
 
+        byte[] bodyBytes = readBodyContent(in, headers, bodyBuffer);
+
+        Map<String, List<String>> postParams = new HashMap<>();
+        if ("POST".equalsIgnoreCase(method)
+            && headers.containsKey("Content-Type")
+            && headers.get("Content-Type").startsWith("application/x-www-form-urlencoded"))
+            postParams = parsePostParams(bodyBytes);
+
+        return new Request(method, path, version, headers, bodyBytes, queryParams, postParams);
+    }
+
+    private static byte[] readBodyContent(InputStream in, Map<String, String> headers, ByteArrayOutputStream bodyBuffer) throws IOException {
+        byte[] buffer = new byte[limit];
+        int read;
+
         if (headers.containsKey("Content-Length")) {
             int contentLength = Integer.parseInt(headers.get("Content-Length"));
             while (bodyBuffer.size() < contentLength) {
@@ -81,10 +97,27 @@ public class Request {
                 bodyBuffer.write(buffer, 0, read);
             }
         }
-        byte[] bodyBytes = bodyBuffer.toByteArray();
-
-        return new Request(method, path, version, headers, bodyBytes, queryParams);
+        return bodyBuffer.toByteArray();
     }
+
+    private static Map<String, List<String>> parsePostParams(byte[] bodyBytes) throws IOException {
+        Map<String, List<String>> postParams = new HashMap<>();
+
+        String body = new String(bodyBytes, StandardCharsets.UTF_8);
+        String[] paramPairs = body.split("&");
+
+        for (String pair : paramPairs) {
+            String[] keyValue = pair.split("=", 2);
+            if (keyValue.length == 2) {
+                String key = URLDecoder.decode(keyValue[0], StandardCharsets.UTF_8);
+                String value = URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8);
+
+                postParams.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+            }
+        }
+        return postParams;
+    }
+
 
     private static Map<String, String> parseQueryParams(String queryString) {
         Map<String, String> queryParams = new HashMap<>();
@@ -132,6 +165,15 @@ public class Request {
 
     public String getBodyAsString() throws IOException {
         return new String(bodyBytes, StandardCharsets.UTF_8);
+    }
+
+    public String getPostParam(String name) {
+        List<String> values = postParams.get(name);
+        return values != null && !values.isEmpty() ? values.get(0) : null;
+    }
+
+    public List<String> getPostParams(String name) {
+        return postParams.getOrDefault(name, Collections.emptyList());
     }
 }
 
