@@ -1,4 +1,7 @@
-package org;
+package org.request;
+
+import org.Part;
+import org.parsers.MultipartParser;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -9,30 +12,35 @@ import java.util.*;
 
 
 public class Request {
+    private static final int BUFFER_SIZE = 4096;
+
     private final String method;
     private final String path;
+    private final String version;
+    private final Map<String, String> headers;
     private final Map<String, String> queryParams;
-    private static final int limit = 4096;
-    private final byte[] bodyBytes;
-    private final Map<String, List<String>> postParams;
 
-    public Request(String method, String path, String version, Map<String, String> headers,
-                   byte[] bodyBytes, Map<String, String> queryParams, Map<String, List<String>> postParams) {
-        this.method = method;
-        this.path = path;
-        this.queryParams = queryParams;
-        this.bodyBytes = bodyBytes;
-        this.postParams = postParams;
+    private final byte[] bodyBytes;
+    private final Map<String, List<Part>> postParams;
+
+    protected Request(RequestBuilder builder) {
+        this.method = builder.method;
+        this.path = builder.path;
+        this.version = builder.version;
+        this.headers = builder.headers;
+        this.queryParams = builder.queryParams;
+        this.bodyBytes = builder.bodyBytes;
+        this.postParams = builder.postParams;
     }
 
     public static Request fromInputStream(InputStream in) throws IOException {
         ByteArrayOutputStream requestLine = new ByteArrayOutputStream();
-        byte[] buffer = new byte[limit];
+        byte[] buffer = new byte[BUFFER_SIZE];
         int read;
 
         while ((read = in.read(buffer)) != -1) {
             requestLine.write(buffer, 0, read);
-            if (requestLine.toString().contains("\r\n\r\n")) {
+            if (requestLine.toString(StandardCharsets.UTF_8).contains("\r\n\r\n")) {
                 break;
             }
         }
@@ -76,17 +84,37 @@ public class Request {
 
         byte[] bodyBytes = readBodyContent(in, headers, bodyBuffer);
 
-        Map<String, List<String>> postParams = new HashMap<>();
-        if ("POST".equalsIgnoreCase(method)
-            && headers.containsKey("Content-Type")
-            && headers.get("Content-Type").startsWith("application/x-www-form-urlencoded"))
-            postParams = parsePostParams(bodyBytes);
+// Parse post parameters if applicable
+        Map<String, List<Part>> postParams = parsePostParameters(method, headers, bodyBytes);
 
-        return new Request(method, path, version, headers, bodyBytes, queryParams, postParams);
+
+        return new RequestBuilder()
+                .method(method)
+                .path(path)
+                .version(version)
+                .headers(headers)
+                .queryParams(queryParams)
+                .bodyBytes(bodyBytes)
+                .postParams(postParams)
+                .build();
+    }
+
+    private static Map<String, List<Part>> parsePostParameters(String method, Map<String, String> headers, byte[] bodyBytes) throws IOException {
+        Map<String, List<Part>> postParams = new HashMap<>();
+        if ("POST".equalsIgnoreCase(method) && headers.containsKey("Content-Type")) {
+            String contentType = headers.get("Content-Type");
+            if (contentType.startsWith("application/x-www-form-urlencoded")) {
+                postParams = parseFormUrlencoded(bodyBytes);
+            } else if (contentType.startsWith("multipart/form-data")) {
+                MultipartParser parser = new MultipartParser();
+                postParams = parser.parse(bodyBytes, contentType);
+            }
+        }
+        return postParams;
     }
 
     private static byte[] readBodyContent(InputStream in, Map<String, String> headers, ByteArrayOutputStream bodyBuffer) throws IOException {
-        byte[] buffer = new byte[limit];
+        byte[] buffer = new byte[BUFFER_SIZE];
         int read;
 
         if (headers.containsKey("Content-Length")) {
@@ -100,8 +128,8 @@ public class Request {
         return bodyBuffer.toByteArray();
     }
 
-    private static Map<String, List<String>> parsePostParams(byte[] bodyBytes) throws IOException {
-        Map<String, List<String>> postParams = new HashMap<>();
+    private static Map<String, List<Part>> parseFormUrlencoded(byte[] bodyBytes) throws IOException {
+        Map<String, List<Part>> postParams = new HashMap<>();
 
         String body = new String(bodyBytes, StandardCharsets.UTF_8);
         String[] paramPairs = body.split("&");
@@ -112,7 +140,10 @@ public class Request {
                 String key = URLDecoder.decode(keyValue[0], StandardCharsets.UTF_8);
                 String value = URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8);
 
-                postParams.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+                byte[] valueBytes = value.getBytes(StandardCharsets.UTF_8);
+                Part part = new Part(key, null, "text/plain", valueBytes);
+
+                postParams.computeIfAbsent(key, k -> new ArrayList<>()).add(part);
             }
         }
         return postParams;
@@ -167,13 +198,12 @@ public class Request {
         return new String(bodyBytes, StandardCharsets.UTF_8);
     }
 
-    public String getPostParam(String name) {
-        List<String> values = postParams.get(name);
+    public Part getPostParam(String name) {
+        List<Part> values = postParams.get(name);
         return values != null && !values.isEmpty() ? values.get(0) : null;
     }
 
-    public List<String> getPostParams(String name) {
+    public List<Part> getPostParams(String name) {
         return postParams.getOrDefault(name, Collections.emptyList());
     }
 }
-
