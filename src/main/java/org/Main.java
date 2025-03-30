@@ -1,8 +1,6 @@
 package org;
 
 
-import org.parsers.Response;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -40,6 +38,20 @@ public class Main {
             Response.ok("text/plain", response).send(out);
         });
 
+        // POST handler for multipart
+        server.addHandler("POST", "/upload", (request, out) -> {
+            Part namePart = request.getPostParam("name");
+            Part filePart = request.getPostParam("file");
+
+            String name = namePart != null ? namePart.getContentAsString() : "unknown";
+            String filename = filePart != null ? filePart.getFilename() : "no file";
+            int size = filePart != null ? filePart.getData().length : 0;
+
+            String response = "Uploaded by: " + name + "<br>Filename: " + filename + "<br>Size: " + size + " bytes";
+
+            Response.ok("text/html", response).send(out);
+        });
+
         new Thread(server::start).start();
 
         try {
@@ -65,6 +77,10 @@ public class Main {
 
             System.out.println("\nTesting POST /submit (form-urlencoded)");
             client.sendPostRequest("/submit", "name=Aleh&hobby=gaming&hobby=coding");// Form-urlencoded POST
+
+            System.out.println("\nTesting POST /upload (multipart-form-data)");
+            client.sendMultipartPostRequest("/upload");
+
         } catch (IOException | InterruptedException e) {
             System.out.println("Client error: " + e.getMessage());
         }

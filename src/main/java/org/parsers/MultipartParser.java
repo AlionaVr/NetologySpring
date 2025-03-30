@@ -1,12 +1,17 @@
 package org.parsers;
 
 import org.Part;
+import org.apache.commons.fileupload.MultipartStream;
 
-import java.nio.charset.StandardCharsets;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.*;
 
 public class MultipartParser {
     private final Map<String, List<Part>> parts = new HashMap<>();
+    private final int BUFFER_LIMIT = 4096;
+
 
     private static Map<String, String> parseHeaders(String headerText) {
         Map<String, String> headers = new HashMap<>();
@@ -23,58 +28,65 @@ public class MultipartParser {
     }
 
     private static String findBoundary(String contentType) {
-        if (contentType != null) {
+        if (contentType != null && contentType.startsWith("multipart/form-data")) {
             for (String param : contentType.split(";")) {
                 param = param.trim();
                 if (param.startsWith("boundary=")) {
-                    return param.substring("boundary=".length());
+                    return param.substring("boundary=".length()).replace("\"", "");
                 }
             }
         }
         return null;
     }
 
-    private static String extractParam(String line, String paramName) {
+    private static String extractParam(String header, String paramName) {
         // Content-Disposition: form-data; name="file"; filename="test.txt"
-        String[] parts = line.split(";");
-        for (String part : parts) {
+        for (String part : header.split(";")) {
             part = part.trim();
             if (part.startsWith(paramName + "=")) {
-                return part.substring(5).replaceAll("^\"|\"$", "");
+                return part.substring(paramName.length() + 1).replaceAll("^\"|\"$", "");
             }
         }
         return null;
     }
 
-    public Map<String, List<Part>> parse(byte[] bodyBytes, String contentType) {
+    public Map<String, List<Part>> parse(byte[] bodyBytes, String contentType) throws IOException {
         String boundary = findBoundary(contentType);
-        if (boundary == null) return parts;
+        if (boundary == null || boundary.isEmpty()) return parts;
 
-        String delimiter = "--" + boundary;
+        try (ByteArrayInputStream input = new ByteArrayInputStream(bodyBytes)) {
+            MultipartStream multipartStream = new MultipartStream(input, boundary.getBytes(), BUFFER_LIMIT, null);
 
-        String bodyText = new String(bodyBytes, StandardCharsets.UTF_8);
-        String[] rawParts = bodyText.split(delimiter);
+            boolean nextPart = multipartStream.skipPreamble();
+            while (nextPart) {
+                try {
+                    Map<String, String> headers = parseHeaders(multipartStream.readHeaders());
+                    String contentDisposition = headers.entrySet().stream()
+                            .filter(e -> e.getKey().equalsIgnoreCase("Content-Disposition"))
+                            .map(Map.Entry::getValue)
+                            .findFirst()
+                            .orElse(null);
+                    if (contentDisposition == null) {
+                        nextPart = multipartStream.readBoundary();
+                        continue;
+                    }
 
-        for (String rawPart : rawParts) {
-            rawPart = rawPart.strip();
-            if (rawPart.isEmpty() || rawPart.equals("--")) continue;
-            int headerEndIndex = rawPart.indexOf("\r\n\r\n");
-            if (headerEndIndex == -1) continue;
-            String headerPart = rawPart.substring(0, headerEndIndex);
-            String bodyPart = rawPart.substring(headerEndIndex + 4);
+                    String name = extractParam(contentDisposition, "name");
+                    String filename = extractParam(contentDisposition, "filename");
+                    String contentTypeHeader = headers.get("Content-Type");
 
-            Map<String, String> headers = parseHeaders(headerPart);
-            String contentDisposition = headers.get("Content-Disposition");
-            if (contentDisposition == null) continue;
+                    ByteArrayOutputStream partData = new ByteArrayOutputStream();
+                    multipartStream.readBodyData(partData);
 
-            String name = extractParam(contentDisposition, "name");
-            String filename = extractParam(contentDisposition, "filename");
-            String contentTypeHeader = headers.get("Content-Type");
+                    Part part = new Part(name, filename, contentTypeHeader, partData.toByteArray());
+                    parts.computeIfAbsent(name, k -> new ArrayList<>()).add(part);
 
-            byte[] data = bodyPart.getBytes(StandardCharsets.UTF_8);
-
-            Part part = new Part(name, filename, contentTypeHeader, data);
-            parts.computeIfAbsent(name, k -> new ArrayList<>()).add(part);
+                    nextPart = multipartStream.readBoundary();
+                } catch (IOException e) {
+                    System.err.println("Error reading multipart part: " + e.getMessage());
+                    break;
+                }
+            }
         }
         return parts;
     }

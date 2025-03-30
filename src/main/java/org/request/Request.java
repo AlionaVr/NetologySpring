@@ -49,6 +49,9 @@ public class Request {
         String requestText = new String(requestLineByteArray, StandardCharsets.UTF_8);
 
         int headerEndIndex = requestText.indexOf("\r\n\r\n");
+        if (headerEndIndex == -1) {
+            throw new IOException("Invalid HTTP request: headers not terminated");
+        }
         String headerPart = requestText.substring(0, headerEndIndex);
         String[] headerLines = headerPart.split("\r\n");
 
@@ -114,15 +117,17 @@ public class Request {
     }
 
     private static byte[] readBodyContent(InputStream in, Map<String, String> headers, ByteArrayOutputStream bodyBuffer) throws IOException {
-        byte[] buffer = new byte[BUFFER_SIZE];
-        int read;
-
         if (headers.containsKey("Content-Length")) {
             int contentLength = Integer.parseInt(headers.get("Content-Length"));
-            while (bodyBuffer.size() < contentLength) {
-                read = in.read(buffer);
+            int alreadyRead = bodyBuffer.size();
+            int remaining = contentLength - alreadyRead;
+
+            byte[] buffer = new byte[BUFFER_SIZE];
+            while (remaining > 0) {
+                int read = in.read(buffer, 0, Math.min(buffer.length, remaining));
                 if (read == -1) break;
                 bodyBuffer.write(buffer, 0, read);
+                remaining -= read;
             }
         }
         return bodyBuffer.toByteArray();

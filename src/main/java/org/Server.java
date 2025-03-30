@@ -1,6 +1,5 @@
 package org;
 
-import org.parsers.Response;
 import org.request.Request;
 
 import java.io.BufferedOutputStream;
