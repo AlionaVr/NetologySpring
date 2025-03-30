@@ -54,7 +54,6 @@ public class Server {
         try (socket;
              BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())
         ) {
-
             Request request = Request.fromInputStream(socket.getInputStream());
             String path = request.getPath();
             String method = request.getMethod();

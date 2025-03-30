@@ -1,14 +1,19 @@
 package org.request;
 
 import org.Part;
-import org.parsers.MultipartParser;
+import org.parsers.FormUrlencodedBodyParser;
+import org.parsers.HeaderParser;
+import org.parsers.MultipartBodyParser;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 
 public class Request {
@@ -75,8 +80,8 @@ public class Request {
         } else {
             path = fullPath;
         }
-
-        Map<String, String> headers = parseHeaders(headerLines);
+        HeaderParser headerParser = new HeaderParser();
+        Map<String, String> headers = headerParser.parseHeaders(headerPart);
 
         ByteArrayOutputStream bodyBuffer = new ByteArrayOutputStream();
         int bodyStart = headerEndIndex + 4;   //after \r\n\r\n
@@ -107,9 +112,10 @@ public class Request {
         if ("POST".equalsIgnoreCase(method) && headers.containsKey("Content-Type")) {
             String contentType = headers.get("Content-Type");
             if (contentType.startsWith("application/x-www-form-urlencoded")) {
-                postParams = parseFormUrlencoded(bodyBytes);
+                FormUrlencodedBodyParser parser = new FormUrlencodedBodyParser();
+                postParams = parser.parse(bodyBytes, contentType);
             } else if (contentType.startsWith("multipart/form-data")) {
-                MultipartParser parser = new MultipartParser();
+                MultipartBodyParser parser = new MultipartBodyParser();
                 postParams = parser.parse(bodyBytes, contentType);
             }
         }
@@ -133,28 +139,6 @@ public class Request {
         return bodyBuffer.toByteArray();
     }
 
-    private static Map<String, List<Part>> parseFormUrlencoded(byte[] bodyBytes) throws IOException {
-        Map<String, List<Part>> postParams = new HashMap<>();
-
-        String body = new String(bodyBytes, StandardCharsets.UTF_8);
-        String[] paramPairs = body.split("&");
-
-        for (String pair : paramPairs) {
-            String[] keyValue = pair.split("=", 2);
-            if (keyValue.length == 2) {
-                String key = URLDecoder.decode(keyValue[0], StandardCharsets.UTF_8);
-                String value = URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8);
-
-                byte[] valueBytes = value.getBytes(StandardCharsets.UTF_8);
-                Part part = new Part(key, null, "text/plain", valueBytes);
-
-                postParams.computeIfAbsent(key, k -> new ArrayList<>()).add(part);
-            }
-        }
-        return postParams;
-    }
-
-
     private static Map<String, String> parseQueryParams(String queryString) {
         Map<String, String> queryParams = new HashMap<>();
         String[] params = queryString.split("&");
@@ -167,20 +151,6 @@ public class Request {
             }
         }
         return queryParams;
-    }
-
-
-    private static Map<String, String> parseHeaders(String[] lines) {
-        Map<String, String> headers = new HashMap<>();
-        for (int i = 1; i < lines.length; i++) {
-            String[] headerParts = lines[i].split(":", 2);
-            if (headerParts.length == 2) {
-                String name = headerParts[0].trim();
-                String value = headerParts[1].trim();
-                headers.put(name, value);
-            }
-        }
-        return headers;
     }
 
     public String getPath() {
