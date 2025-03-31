@@ -1,6 +1,8 @@
 package org;
 
 
+import org.apache.commons.fileupload.FileItem;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -25,12 +27,12 @@ public class Main {
 
         // POST handler for form-urlencoded
         server.addHandler("POST", "/submit", (request, out) -> {
-            Part namePart = request.getPostParam("name");
-            List<Part> hobbies = request.getPostParams("hobby");
+            FileItem namePart = request.getPostParam("name");
+            List<FileItem> hobbies = request.getPostParams("hobby");
 
             String name = namePart != null ? namePart.toString() : "unknown";
             String hobbiesText = hobbies.stream()
-                    .map(Part::toString)
+                    .map(FileItem::toString)
                     .collect(Collectors.joining(", "));
 
             String response = "Name: " + name + ", hobbies: " + hobbiesText;
@@ -40,12 +42,12 @@ public class Main {
 
         // POST handler for multipart
         server.addHandler("POST", "/upload", (request, out) -> {
-            Part namePart = request.getPostParam("name");
-            Part filePart = request.getPostParam("file");
+            FileItem nameItem = request.getPostParam("name");
+            FileItem fileItem = request.getPostParam("file");
 
-            String name = namePart != null ? namePart.getContentAsString() : "unknown";
-            String filename = filePart != null ? filePart.getFilename() : "no file";
-            int size = filePart != null ? filePart.getData().length : 0;
+            String name = nameItem != null ? nameItem.getString() : "unknown";
+            String filename = fileItem != null ? fileItem.getName() : "no file";
+            long size = fileItem != null ? fileItem.getSize() : 0;
 
             String response = "Uploaded by: " + name + "<br>Filename: " + filename + "<br>Size: " + size + " bytes";
 

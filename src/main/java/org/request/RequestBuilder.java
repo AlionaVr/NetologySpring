@@ -1,6 +1,6 @@
 package org.request;
 
-import org.Part;
+import org.apache.commons.fileupload.FileItem;
 
 import java.util.HashMap;
 import java.util.List;
@@ -13,7 +13,7 @@ public class RequestBuilder {
     protected Map<String, String> headers = new HashMap<>();
     protected Map<String, String> queryParams = new HashMap<>();
     protected byte[] bodyBytes = new byte[0];
-    protected Map<String, List<Part>> postParams = new HashMap<>();
+    protected Map<String, List<FileItem>> postParams = new HashMap<>();
 
     public RequestBuilder method(String method) {
         this.method = method;
@@ -45,7 +45,7 @@ public class RequestBuilder {
         return this;
     }
 
-    public RequestBuilder postParams(Map<String, List<Part>> postParams) {
+    public RequestBuilder postParams(Map<String, List<FileItem>> postParams) {
         this.postParams = postParams;
         return this;
     }

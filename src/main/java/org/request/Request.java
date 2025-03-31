@@ -1,6 +1,7 @@
 package org.request;
 
-import org.Part;
+import org.apache.commons.fileupload.FileItem;
+import org.parsers.BodyParser;
 import org.parsers.FormUrlencodedBodyParser;
 import org.parsers.HeaderParser;
 import org.parsers.MultipartBodyParser;
@@ -24,9 +25,8 @@ public class Request {
     private final String version;
     private final Map<String, String> headers;
     private final Map<String, String> queryParams;
-
     private final byte[] bodyBytes;
-    private final Map<String, List<Part>> postParams;
+    private final Map<String, List<FileItem>> postParams;
 
     protected Request(RequestBuilder builder) {
         this.method = builder.method;
@@ -57,10 +57,11 @@ public class Request {
         if (headerEndIndex == -1) {
             throw new IOException("Invalid HTTP request: headers not terminated");
         }
+
         String headerPart = requestText.substring(0, headerEndIndex);
         String[] headerLines = headerPart.split("\r\n");
-
         String[] requestLineParts = headerLines[0].split(" ");//"POST /messages?last=10 HTTP/1.1"
+
         if (requestLineParts.length != 3) {
             throw new IOException("Invalid request line: " + headerPart);
         }
@@ -80,6 +81,7 @@ public class Request {
         } else {
             path = fullPath;
         }
+
         HeaderParser headerParser = new HeaderParser();
         Map<String, String> headers = headerParser.parseHeaders(headerPart);
 
@@ -91,10 +93,8 @@ public class Request {
         }
 
         byte[] bodyBytes = readBodyContent(in, headers, bodyBuffer);
-
-// Parse post parameters if applicable
-        Map<String, List<Part>> postParams = parsePostParameters(method, headers, bodyBytes);
-
+        // Parse post parameters if applicable
+        Map<String, List<FileItem>> postParams = parsePostParameters(method, headers, bodyBytes);
 
         return new RequestBuilder()
                 .method(method)
@@ -107,17 +107,17 @@ public class Request {
                 .build();
     }
 
-    private static Map<String, List<Part>> parsePostParameters(String method, Map<String, String> headers, byte[] bodyBytes) throws IOException {
-        Map<String, List<Part>> postParams = new HashMap<>();
+    private static Map<String, List<FileItem>> parsePostParameters(String method, Map<String, String> headers, byte[] bodyBytes) throws IOException {
+        Map<String, List<FileItem>> postParams = new HashMap<>();
         if ("POST".equalsIgnoreCase(method) && headers.containsKey("Content-Type")) {
             String contentType = headers.get("Content-Type");
+            BodyParser parser = null;
             if (contentType.startsWith("application/x-www-form-urlencoded")) {
-                FormUrlencodedBodyParser parser = new FormUrlencodedBodyParser();
-                postParams = parser.parse(bodyBytes, contentType);
+                parser = new FormUrlencodedBodyParser();
             } else if (contentType.startsWith("multipart/form-data")) {
-                MultipartBodyParser parser = new MultipartBodyParser();
-                postParams = parser.parse(bodyBytes, contentType);
+                parser = new MultipartBodyParser();
             }
+            postParams = parser != null ? parser.parse(bodyBytes, contentType) : null;
         }
         return postParams;
     }
@@ -173,12 +173,12 @@ public class Request {
         return new String(bodyBytes, StandardCharsets.UTF_8);
     }
 
-    public Part getPostParam(String name) {
-        List<Part> values = postParams.get(name);
+    public FileItem getPostParam(String name) {
+        List<FileItem> values = postParams.get(name);
         return values != null && !values.isEmpty() ? values.get(0) : null;
     }
 
-    public List<Part> getPostParams(String name) {
+    public List<FileItem> getPostParams(String name) {
         return postParams.getOrDefault(name, Collections.emptyList());
     }
 }
