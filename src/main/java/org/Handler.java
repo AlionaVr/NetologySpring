@@ -1,5 +1,7 @@
 package org;
 
+import org.request.Request;
+
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 
