@@ -1,38 +1,51 @@
-package org;
+package org.request;
+
+import org.apache.commons.fileupload.FileItem;
+import org.parsers.BodyParser;
+import org.parsers.FormUrlencodedBodyParser;
+import org.parsers.HeaderParser;
+import org.parsers.MultipartBodyParser;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 
 public class Request {
+    private static final int BUFFER_SIZE = 4096;
+
     private final String method;
     private final String path;
+    private final String version;
+    private final Map<String, String> headers;
     private final Map<String, String> queryParams;
-    private static final int limit = 4096;
     private final byte[] bodyBytes;
-    private final Map<String, List<String>> postParams;
+    private final Map<String, List<FileItem>> postParams;
 
-    public Request(String method, String path, String version, Map<String, String> headers,
-                   byte[] bodyBytes, Map<String, String> queryParams, Map<String, List<String>> postParams) {
-        this.method = method;
-        this.path = path;
-        this.queryParams = queryParams;
-        this.bodyBytes = bodyBytes;
-        this.postParams = postParams;
+    protected Request(RequestBuilder builder) {
+        this.method = builder.method;
+        this.path = builder.path;
+        this.version = builder.version;
+        this.headers = builder.headers;
+        this.queryParams = builder.queryParams;
+        this.bodyBytes = builder.bodyBytes;
+        this.postParams = builder.postParams;
     }
 
     public static Request fromInputStream(InputStream in) throws IOException {
         ByteArrayOutputStream requestLine = new ByteArrayOutputStream();
-        byte[] buffer = new byte[limit];
+        byte[] buffer = new byte[BUFFER_SIZE];
         int read;
 
         while ((read = in.read(buffer)) != -1) {
             requestLine.write(buffer, 0, read);
-            if (requestLine.toString().contains("\r\n\r\n")) {
+            if (requestLine.toString(StandardCharsets.UTF_8).contains("\r\n\r\n")) {
                 break;
             }
         }
@@ -41,10 +54,14 @@ public class Request {
         String requestText = new String(requestLineByteArray, StandardCharsets.UTF_8);
 
         int headerEndIndex = requestText.indexOf("\r\n\r\n");
+        if (headerEndIndex == -1) {
+            throw new IOException("Invalid HTTP request: headers not terminated");
+        }
+
         String headerPart = requestText.substring(0, headerEndIndex);
         String[] headerLines = headerPart.split("\r\n");
-
         String[] requestLineParts = headerLines[0].split(" ");//"POST /messages?last=10 HTTP/1.1"
+
         if (requestLineParts.length != 3) {
             throw new IOException("Invalid request line: " + headerPart);
         }
@@ -65,7 +82,8 @@ public class Request {
             path = fullPath;
         }
 
-        Map<String, String> headers = parseHeaders(headerLines);
+        HeaderParser headerParser = new HeaderParser();
+        Map<String, String> headers = headerParser.parseHeaders(headerPart);
 
         ByteArrayOutputStream bodyBuffer = new ByteArrayOutputStream();
         int bodyStart = headerEndIndex + 4;   //after \r\n\r\n
@@ -75,49 +93,51 @@ public class Request {
         }
 
         byte[] bodyBytes = readBodyContent(in, headers, bodyBuffer);
+        // Parse post parameters if applicable
+        Map<String, List<FileItem>> postParams = parsePostParameters(method, headers, bodyBytes);
 
-        Map<String, List<String>> postParams = new HashMap<>();
-        if ("POST".equalsIgnoreCase(method)
-            && headers.containsKey("Content-Type")
-            && headers.get("Content-Type").startsWith("application/x-www-form-urlencoded"))
-            postParams = parsePostParams(bodyBytes);
-
-        return new Request(method, path, version, headers, bodyBytes, queryParams, postParams);
+        return new RequestBuilder()
+                .method(method)
+                .path(path)
+                .version(version)
+                .headers(headers)
+                .queryParams(queryParams)
+                .bodyBytes(bodyBytes)
+                .postParams(postParams)
+                .build();
     }
 
-    private static byte[] readBodyContent(InputStream in, Map<String, String> headers, ByteArrayOutputStream bodyBuffer) throws IOException {
-        byte[] buffer = new byte[limit];
-        int read;
-
-        if (headers.containsKey("Content-Length")) {
-            int contentLength = Integer.parseInt(headers.get("Content-Length"));
-            while (bodyBuffer.size() < contentLength) {
-                read = in.read(buffer);
-                if (read == -1) break;
-                bodyBuffer.write(buffer, 0, read);
+    private static Map<String, List<FileItem>> parsePostParameters(String method, Map<String, String> headers, byte[] bodyBytes) throws IOException {
+        Map<String, List<FileItem>> postParams = new HashMap<>();
+        if ("POST".equalsIgnoreCase(method) && headers.containsKey("Content-Type")) {
+            String contentType = headers.get("Content-Type");
+            BodyParser parser = null;
+            if (contentType.startsWith("application/x-www-form-urlencoded")) {
+                parser = new FormUrlencodedBodyParser();
+            } else if (contentType.startsWith("multipart/form-data")) {
+                parser = new MultipartBodyParser();
             }
-        }
-        return bodyBuffer.toByteArray();
-    }
-
-    private static Map<String, List<String>> parsePostParams(byte[] bodyBytes) throws IOException {
-        Map<String, List<String>> postParams = new HashMap<>();
-
-        String body = new String(bodyBytes, StandardCharsets.UTF_8);
-        String[] paramPairs = body.split("&");
-
-        for (String pair : paramPairs) {
-            String[] keyValue = pair.split("=", 2);
-            if (keyValue.length == 2) {
-                String key = URLDecoder.decode(keyValue[0], StandardCharsets.UTF_8);
-                String value = URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8);
-
-                postParams.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
-            }
+            postParams = parser != null ? parser.parse(bodyBytes, contentType) : null;
         }
         return postParams;
     }
 
+    private static byte[] readBodyContent(InputStream in, Map<String, String> headers, ByteArrayOutputStream bodyBuffer) throws IOException {
+        if (headers.containsKey("Content-Length")) {
+            int contentLength = Integer.parseInt(headers.get("Content-Length"));
+            int alreadyRead = bodyBuffer.size();
+            int remaining = contentLength - alreadyRead;
+
+            byte[] buffer = new byte[BUFFER_SIZE];
+            while (remaining > 0) {
+                int read = in.read(buffer, 0, Math.min(buffer.length, remaining));
+                if (read == -1) break;
+                bodyBuffer.write(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+        return bodyBuffer.toByteArray();
+    }
 
     private static Map<String, String> parseQueryParams(String queryString) {
         Map<String, String> queryParams = new HashMap<>();
@@ -131,20 +151,6 @@ public class Request {
             }
         }
         return queryParams;
-    }
-
-
-    private static Map<String, String> parseHeaders(String[] lines) {
-        Map<String, String> headers = new HashMap<>();
-        for (int i = 1; i < lines.length; i++) {
-            String[] headerParts = lines[i].split(":", 2);
-            if (headerParts.length == 2) {
-                String name = headerParts[0].trim();
-                String value = headerParts[1].trim();
-                headers.put(name, value);
-            }
-        }
-        return headers;
     }
 
     public String getPath() {
@@ -167,13 +173,12 @@ public class Request {
         return new String(bodyBytes, StandardCharsets.UTF_8);
     }
 
-    public String getPostParam(String name) {
-        List<String> values = postParams.get(name);
+    public FileItem getPostParam(String name) {
+        List<FileItem> values = postParams.get(name);
         return values != null && !values.isEmpty() ? values.get(0) : null;
     }
 
-    public List<String> getPostParams(String name) {
+    public List<FileItem> getPostParams(String name) {
         return postParams.getOrDefault(name, Collections.emptyList());
     }
 }
-

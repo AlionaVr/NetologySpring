@@ -1,5 +1,7 @@
 package org;
 
+import org.request.Request;
+
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -52,7 +54,6 @@ public class Server {
         try (socket;
              BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())
         ) {
-
             Request request = Request.fromInputStream(socket.getInputStream());
             String path = request.getPath();
             String method = request.getMethod();
@@ -68,16 +69,19 @@ public class Server {
 
             Path filePath = Path.of(".", PUBLIC_DIR, path);
             if (!Files.exists(filePath)) {
-                sendResponse(out, 404, "Not Found", null, 0);
+                Response.notFound().send(out);
                 return;
             }
 
             String mimeType = Files.probeContentType(filePath);
 
             if (path.equals(CLASSIC_HTML_PATH)) {
-                sendForClassicHtml(out, filePath, mimeType);
+                String template = Files.readString(filePath);
+                String content = template.replace("{time}", LocalDateTime.now().toString());
+                Response.ok(mimeType, content).send(out);
             } else {
-                sendDefaultFile(out, filePath, mimeType);
+                byte[] content = Files.readAllBytes(filePath);
+                Response.ok(mimeType, content).send(out);
             }
         } catch (IOException e) {
             System.err.println("Connection handling error: " + e.getMessage());
@@ -87,38 +91,6 @@ public class Server {
     public void addHandler(String method, String path, Handler handler) {
         handlers.computeIfAbsent(method, k -> new ConcurrentHashMap<>())
                 .put(path, handler);
-    }
-
-    private void sendForClassicHtml(BufferedOutputStream out, Path filePath, String mimeType) throws IOException {
-        String template = Files.readString(filePath);
-        byte[] content = template.replace("{time}", LocalDateTime.now().toString())
-                .getBytes();
-        sendResponse(out, 200, "OK", mimeType, content.length);
-        out.write(content);
-        out.flush();
-
-    }
-
-    private void sendDefaultFile(BufferedOutputStream out, Path filePath, String mimeType) throws IOException {
-        long length = Files.size(filePath);
-        sendResponse(out, 200, "OK", mimeType, length);
-        Files.copy(filePath, out);
-        out.flush();
-    }
-
-    protected void sendResponse(BufferedOutputStream out, int statusCode, String statusText,
-                                String mimeType, long contentLength) throws IOException {
-        StringBuilder headers = new StringBuilder();
-        headers.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
-
-        if (mimeType != null) {
-            headers.append("Content-Type: ").append(mimeType).append("\r\n");
-        }
-        headers.append("Content-Length: ").append(contentLength).append("\r\n")
-                .append("Connection: close\r\n")
-                .append("\r\n");
-
-        out.write(headers.toString().getBytes());
     }
 }
 
